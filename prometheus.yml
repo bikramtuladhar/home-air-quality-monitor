@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s   # sensor updates every 1s; 15s storage is plenty for trends
+
+scrape_configs:
+  - job_name: pms5003
+    static_configs:
+      - targets: ["localhost:8000"]   # exporter runs on the same Pi
