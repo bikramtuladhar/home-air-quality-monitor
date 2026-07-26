@@ -1,0 +1,159 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Air Quality</title>
+<style>
+  :root { color-scheme: dark; --bg:#111217; --card:#181b1f; --line:#2c3235; --dim:#9aa0a6 }
+  * { box-sizing: border-box }
+  body { margin:0; padding:12px; background:var(--bg); color:#d8d9da;
+         font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:4px;
+          padding:10px 12px; margin-bottom:12px }
+  h2 { margin:0 0 8px; font-size:13px; font-weight:500; color:var(--dim) }
+  #aqi { text-align:center; padding:22px 12px; border-radius:4px; color:#111 }
+  #aqi b { display:block; font-size:34px; font-weight:700; letter-spacing:.02em }
+  #aqi span { font-size:15px; opacity:.85 }
+  .row { display:flex; gap:12px; flex-wrap:wrap }
+  .row .card:first-child { flex:3 1 420px }
+  .row .card:last-child { flex:1 1 160px; display:flex; flex-direction:column }
+  #now { flex:1; display:flex; align-items:center; justify-content:center;
+         font-size:46px; font-weight:700 }
+  #now small { font-size:15px; font-weight:400; color:var(--dim); margin-left:4px }
+  canvas { width:100%; height:260px; display:block }
+  nav { display:flex; gap:6px; margin-bottom:12px; align-items:center }
+  button { background:var(--card); color:#d8d9da; border:1px solid var(--line);
+           border-radius:3px; padding:5px 12px; cursor:pointer; font-size:13px }
+  button[aria-pressed=true] { background:#3d71d9; border-color:#3d71d9; color:#fff }
+  .legend { display:flex; margin-top:4px; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--dim) }
+  #err { color:#e5794b; font-size:12px; margin-left:auto }
+</style>
+
+<nav>
+  <button data-h="6">6h</button>
+  <button data-h="24" aria-pressed="true">24h</button>
+  <button data-h="168">7d</button>
+  <span id="err"></span>
+</nav>
+
+<div class="card" id="aqi"><b>—</b><span>PM2.5, US EPA</span></div>
+
+<div class="row">
+  <div class="card">
+    <h2>PM atmospheric (µg/m³)</h2>
+    <canvas id="mass"></canvas>
+    <div id="legend" class="legend"></div>
+  </div>
+  <div class="card">
+    <h2>PM2.5 now</h2>
+    <div id="now">—<small>µg/m³</small></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Particles per 0.1L (cumulative ≥ size µm)</h2>
+  <canvas id="counts"></canvas>
+  <div id="legend2" class="legend"></div>
+</div>
+
+<script>
+const COLORS = ['#7eb26d','#eab839','#6ed0e0','#ef843c','#e24d42','#1f78c1'];
+const AQI = [ // US EPA PM2.5 breakpoints
+  [12,   '#00e400', 'GOOD'],
+  [35.4, '#ffff00', 'MODERATE'],
+  [55.4, '#ff7e00', 'UNHEALTHY (sensitive groups)'],
+  [150.4,'#ff0000', 'UNHEALTHY'],
+  [250.4,'#8f3f97', 'VERY UNHEALTHY'],
+  [1e9,  '#7e0023', 'HAZARDOUS'],
+];
+let hours = 24;
+
+async function q(expr, start, end, step) {
+  const u = `/api/v1/query_range?query=${encodeURIComponent(expr)}&start=${start}&end=${end}&step=${step}`;
+  const r = await fetch(u);
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  const j = await r.json();
+  return j.data.result.map(s => ({
+    name: s.metric.size || (s.metric.size_um ? '≥' + s.metric.size_um + 'µm' : 'value'),
+    points: s.values.map(([t, v]) => [t, parseFloat(v)]).filter(p => isFinite(p[1])),
+  })).sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
+}
+
+function draw(cv, series) {
+  const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const c = cv.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+
+  const pts = series.flatMap(s => s.points);
+  if (!pts.length) { c.fillStyle = '#666'; c.fillText('no data', 8, 20); return; }
+  const x0 = 48, x1 = W - 8, y0 = 8, y1 = H - 20;
+  const tMin = Math.min(...pts.map(p => p[0])), tMax = Math.max(...pts.map(p => p[0]));
+  const vMax = Math.max(...pts.map(p => p[1])) || 1, vMin = 0;
+  const X = t => x0 + (x1 - x0) * (tMax === tMin ? 1 : (t - tMin) / (tMax - tMin));
+  const Y = v => y1 - (y1 - y0) * (v - vMin) / (vMax - vMin);
+
+  c.font = '11px system-ui'; c.strokeStyle = '#2c3235'; c.fillStyle = '#9aa0a6';
+  for (let i = 0; i <= 4; i++) {            // horizontal grid + y labels
+    const v = vMin + (vMax - vMin) * i / 4, y = Math.round(Y(v)) + .5;
+    c.beginPath(); c.moveTo(x0, y); c.lineTo(x1, y); c.stroke();
+    c.textAlign = 'right'; c.fillText(v >= 100 ? v.toFixed(0) : v.toPrecision(3), x0 - 6, y + 4);
+  }
+  c.textAlign = 'center';
+  for (let i = 0; i <= 4; i++) {            // x labels
+    const t = tMin + (tMax - tMin) * i / 4;
+    const d = new Date(t * 1000);
+    const lbl = (tMax - tMin > 86400 * 2)
+      ? d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'})
+      : d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
+    c.fillText(lbl, X(t), H - 6);
+  }
+
+  c.lineWidth = 1.5;
+  series.forEach((s, i) => {
+    c.strokeStyle = s.color = COLORS[i % COLORS.length];
+    c.beginPath();
+    s.points.forEach((p, j) => j ? c.lineTo(X(p[0]), Y(p[1])) : c.moveTo(X(p[0]), Y(p[1])));
+    c.stroke();
+  });
+}
+
+async function refresh() {
+  const end = Math.floor(Date.now() / 1000), start = end - hours * 3600;
+  const step = Math.max(15, Math.round((end - start) / 700));
+  try {
+    const [mass, counts] = await Promise.all([
+      q('pms5003_pm_ugm3{calibration="atm"}', start, end, step),
+      q('pms5003_particles', start, end, step),
+    ]);
+    draw(document.getElementById('mass'), mass);
+    draw(document.getElementById('counts'), counts);
+    const key = ss => ss.map(s => `<span style="color:${s.color}">■</span>&nbsp;${s.name}`).join('');
+    legend.innerHTML = key(mass);
+    legend2.innerHTML = key(counts);
+
+    const pm = mass.find(s => s.name === 'pm2.5');
+    const last = pm && pm.points.length ? pm.points[pm.points.length - 1][1] : null;
+    const box = document.getElementById('aqi');
+    if (last === null) { box.style.background = '#181b1f'; box.querySelector('b').textContent = '—'; }
+    else {
+      const [, color, label] = AQI.find(b => last <= b[0]);
+      box.style.background = color;
+      box.querySelector('b').textContent = label;
+      document.getElementById('now').innerHTML =
+        last.toFixed(1) + '<small>µg/m³</small>';
+    }
+    err.textContent = '';
+  } catch (e) { err.textContent = 'query failed: ' + e.message; }
+}
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.removeAttribute('aria-pressed'));
+  b.setAttribute('aria-pressed', 'true');
+  hours = +b.dataset.h;
+  refresh();
+});
+addEventListener('resize', refresh);
+refresh();
+setInterval(refresh, 30000);
+</script>

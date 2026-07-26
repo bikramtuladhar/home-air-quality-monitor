@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Expose the Grafana wall publicly via a named Cloudflare Tunnel.
+# Expose the wall publicly via a named Cloudflare Tunnel.
 set -e
 HOST="qai.bikramtuladhar.info.np"
 NAME="pm25-wall"
@@ -42,14 +42,5 @@ WantedBy=multi-user.target
 EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now cloudflared-pm25
-
-echo ">>> grafana root_url"
-sudo tee /etc/systemd/system/grafana-server.service.d/override.conf >/dev/null <<EOF
-[Service]
-Environment=GF_AUTH_ANONYMOUS_ENABLED=true
-Environment=GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-Environment=GF_SERVER_ROOT_URL=https://$HOST/
-EOF
-sudo systemctl daemon-reload && sudo systemctl restart grafana-server
 
 echo ">>> done"
