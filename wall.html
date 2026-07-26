@@ -78,6 +78,13 @@ async function q(expr, start, end, step) {
   })).sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
 }
 
+async function instant(expr) {   // latest scraped sample, independent of the chart range
+  const r = await fetch('/api/v1/query?query=' + encodeURIComponent(expr));
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  const v = (await r.json()).data.result[0];
+  return v ? parseFloat(v.value[1]) : null;
+}
+
 function draw(cv, series) {
   const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
   cv.width = W * dpr; cv.height = H * dpr;
@@ -122,9 +129,10 @@ async function refresh() {
   const end = Math.floor(Date.now() / 1000), start = end - hours * 3600;
   const step = Math.max(15, Math.round((end - start) / 700));
   try {
-    const [mass, counts] = await Promise.all([
+    const [mass, counts, last] = await Promise.all([
       q('pms5003_pm_ugm3{calibration="atm"}', start, end, step),
       q('pms5003_particles', start, end, step),
+      instant('pms5003_pm_ugm3{calibration="atm",size="pm2.5"}'),
     ]);
     draw(document.getElementById('mass'), mass);
     draw(document.getElementById('counts'), counts);
@@ -132,10 +140,11 @@ async function refresh() {
     legend.innerHTML = key(mass);
     legend2.innerHTML = key(counts);
 
-    const pm = mass.find(s => s.name === 'pm2.5');
-    const last = pm && pm.points.length ? pm.points[pm.points.length - 1][1] : null;
     const box = document.getElementById('aqi');
-    if (last === null) { box.style.background = '#181b1f'; box.querySelector('b').textContent = '—'; }
+    if (last === null) {
+      box.style.background = '#181b1f'; box.querySelector('b').textContent = '—';
+      document.getElementById('now').innerHTML = '—<small>µg/m³</small>';
+    }
     else {
       const [, color, label] = AQI.find(b => last <= b[0]);
       box.style.background = color;
